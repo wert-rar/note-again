@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.5] - 2026-11-14
+
+### Fixed
+
+- Registered settings with Obsidian's settings API so each option appears in settings search.
+- Corrected callback return types and type handling for saved data.
+- Used Obsidian's UI helpers and removed the deprecated slider tooltip call.
+- Replaced column-gap with gap in the mobile statistics layout.
+
+### Added
+
+- Automated release builds with GitHub artifact attestations.
+
 ## [0.3.4] - 2026-11-10
 
 ### Added

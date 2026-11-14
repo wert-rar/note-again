@@ -1,4 +1,4 @@
-import { FuzzySuggestModal, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, getAllTags, getLanguage, setIcon, type App, type WorkspaceLeaf } from 'obsidian';
+import { FuzzySuggestModal, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TFile, TFolder, getAllTags, getLanguage, setIcon, type App, type SettingDefinitionItem, type WorkspaceLeaf } from 'obsidian';
 import { en, messagesFor } from './messages.ts';
 import { DEFAULT_GOAL, RECOMMENDED_GOAL_MAX, dayKey, filterNotes, isDailyGoal, parseState, recordOpen, refreshQuest, reminderDue, renamePath, type Settings, type State } from './quest.ts';
 
@@ -21,9 +21,9 @@ export default class NoteAgainPlugin extends Plugin {
     // Obsidian versions before 1.8.7 use the English catalog.
     this.messages = messagesFor(getLanguage?.());
     try {
-      const saved = await this.loadData();
+      const saved: unknown = await this.loadData();
       this.state = parseState(saved, this.messages);
-      if (saved && saved.version !== this.state.version) await this.saveData(this.state);
+      if (saved && saved !== this.state) await this.saveData(this.state);
     } catch (error) {
       new Notice(`${this.messages.loadError} ${String(error)}`, 15000);
       throw error;
@@ -74,7 +74,7 @@ export default class NoteAgainPlugin extends Plugin {
           void this.update(undefined, this.app.workspace.getActiveFile()?.path);
         }
       }));
-      this.registerDomEvent(document, 'visibilitychange', () => { void this.update(undefined, undefined, true); });
+      this.registerDomEvent(activeDocument, 'visibilitychange', () => { void this.update(undefined, undefined, true); });
       this.registerInterval(window.setInterval(() => { void this.update(undefined, undefined, true); }, 60_000));
       void this.update(undefined, this.app.workspace.getActiveFile()?.path, true);
     });
@@ -122,7 +122,7 @@ export default class NoteAgainPlugin extends Plugin {
           refreshQuest(this.state, [...candidates], now);
         }
         const outcome = path === undefined || this.waitingForMetadata ? 'none' : recordOpen(this.state, path, now);
-        const notify = remind && !this.waitingForMetadata && reminderDue(this.state, now.getTime(), document.visibilityState === 'visible');
+        const notify = remind && !this.waitingForMetadata && reminderDue(this.state, now.getTime(), activeDocument.visibilityState === 'visible');
         if (notify) this.state.nextReminderAt = now.getTime() + this.state.settings.intervalMinutes * 60_000;
         if (before !== JSON.stringify(this.state)) await this.saveData(this.state);
         if (this.disposed) return;
@@ -185,7 +185,7 @@ export default class NoteAgainPlugin extends Plugin {
         bar.empty();
         const heading = bar.createDiv({ cls: 'note-again-navigation-heading' });
         heading.createEl('button', { text: 'Note Again', cls: 'note-again-quest-link' }).onclick = () => { void this.showQuest(); };
-        heading.createEl('span', { text: m.notePosition(index + 1, paths.length, quest.opened.length, quest.goal) });
+        heading.createSpan({ text: m.notePosition(index + 1, paths.length, quest.opened.length, quest.goal) });
         const buttons = bar.createDiv({ cls: 'note-again-actions' });
         for (const [step, label] of [[-1, m.previousNote], [1, index === paths.length - 1 ? m.backToQuest : m.nextNote]] as const) {
           const button = buttons.createEl('button', { text: label, cls: step === 1 ? 'mod-cta' : '' });
@@ -213,7 +213,7 @@ export default class NoteAgainPlugin extends Plugin {
   private showReminder(): void {
     const m = this.messages;
     this.reminder?.hide();
-    const fragment = document.createDocumentFragment();
+    const fragment = createFragment();
     const content = fragment.createDiv({ cls: 'note-again-reminder' });
     const { opened, goal } = this.state.quest!;
     content.createEl('strong', { text: `Note Again · ${opened.length}/${goal}` });
@@ -334,7 +334,7 @@ class QuestModal extends Modal {
       const stat = stats.createDiv();
       setIcon(stat.createSpan({ cls: 'note-again-stat-icon' }), String(icon));
       stat.createEl('strong', { text: String(value) });
-      stat.createEl('span', { text: String(label) });
+      stat.createSpan({ text: String(label) });
     }
     if (quest.notes.length < goal) contentEl.createEl('p', { cls: 'note-again-hint',
       text: m.tooFewNotesHint(quest.notes.length, goal) });
@@ -359,22 +359,21 @@ class QuestModal extends Modal {
 }
 
 class ExclusionPicker extends FuzzySuggestModal<string> {
-  constructor(app: App, placeholder: string, noMatches: string, private items: string[], private choose: (item: string) => Promise<void>) {
+  constructor(app: App, placeholder: string, noMatches: string, private items: string[], private choose: (item: string) => void) {
     super(app);
     this.setPlaceholder(placeholder);
     this.emptyStateText = noMatches;
   }
   getItems(): string[] { return this.items; }
   getItemText(item: string): string { return item; }
-  async onChooseItem(item: string): Promise<void> { await this.choose(item); }
+  onChooseItem(item: string): void { this.choose(item); }
 }
 
 class NoteAgainSettings extends PluginSettingTab {
   constructor(app: App, private plugin: NoteAgainPlugin) { super(app, plugin); }
 
-  private renderDailyGoal(): void {
+  private renderDailyGoal(setting: Setting): void {
     const m = this.plugin.messages;
-    const setting = new Setting(this.containerEl).setName(m.dailyGoal);
     setting.descEl.setAttribute('id', 'note-again-goal-description');
     setting.descEl.setAttribute('aria-live', 'polite');
     const control = setting.controlEl.createDiv({ cls: 'note-again-goal-control' });
@@ -427,26 +426,24 @@ class NoteAgainSettings extends PluginSettingTab {
       input.focus();
       await saveGoal();
     };
-    decrease.onclick = () => stepGoal(-1);
-    increase.onclick = () => stepGoal(1);
+    decrease.onclick = () => { void stepGoal(-1); };
+    increase.onclick = () => { void stepGoal(1); };
     input.addEventListener('input', updateIndicator);
-    input.addEventListener('change', saveGoal);
+    input.addEventListener('change', () => { void saveGoal(); });
     updateIndicator();
   }
 
-  private renderExclusions(key: 'excludedFolders' | 'excludedFiles' | 'excludedTags', name: string,
-    description: string, placeholder: string, options: () => string[]): void {
+  private renderExclusions(setting: Setting, key: 'excludedFolders' | 'excludedFiles' | 'excludedTags',
+    placeholder: string, options: () => string[]): void {
     const m = this.plugin.messages;
-    const group = this.containerEl.createDiv({ cls: 'note-again-exclusion-setting' });
-    const setting = new Setting(group).setName(name).setDesc(description);
+    setting.settingEl.addClass('note-again-exclusion-setting');
     setting.addButton(button => button.setButtonText(m.add).onClick(() => {
       new ExclusionPicker(this.app, placeholder, m.noMatches,
-        options().filter(value => !this.plugin.state.settings[key].includes(value)), async value => {
-          await this.plugin.updateFilters(settings => { settings[key].push(value); });
-          renderSelected();
+        options().filter(value => !this.plugin.state.settings[key].includes(value)), value => {
+          void this.plugin.updateFilters(settings => { settings[key].push(value); }).then(renderSelected);
         }).open();
     }));
-    const selected = group.createDiv({ cls: 'note-again-exclusion-list' });
+    const selected = setting.descEl.createDiv({ cls: 'note-again-exclusion-list' });
     const renderSelected = () => {
       selected.empty();
       const values = this.plugin.state.settings[key];
@@ -460,64 +457,104 @@ class NoteAgainSettings extends PluginSettingTab {
         const label = m.remove(value);
         const remove = chip.createEl('button', { cls: 'clickable-icon', attr: { 'aria-label': label, title: label } });
         setIcon(remove, 'x');
-        remove.onclick = async () => {
-          await this.plugin.updateFilters(settings => { settings[key] = settings[key].filter(item => item !== value); });
-          renderSelected();
+        remove.onclick = () => {
+          void this.plugin.updateFilters(settings => { settings[key] = settings[key].filter(item => item !== value); })
+            .then(renderSelected);
         };
       }
     };
     renderSelected();
   }
 
-  display(): void {
+  getSettingDefinitions(): SettingDefinitionItem[] {
     const m = this.plugin.messages;
-    this.containerEl.empty();
-    this.containerEl.createEl('h2', { text: 'Note Again' });
-    this.renderDailyGoal();
     const folders = () => this.app.vault.getAllLoadedFiles().filter((file): file is TFolder => file instanceof TFolder && !file.isRoot())
       .map(folder => folder.path).sort((a, b) => a.localeCompare(b));
-    new Setting(this.containerEl).setName(m.sourceFolder)
-      .setDesc(m.sourceFolderHint)
-      .addDropdown(dropdown => {
-        dropdown.addOption('', m.entireVault);
-        const choices = folders();
-        for (const folder of choices) dropdown.addOption(folder, folder);
-        const source = this.plugin.state.settings.sourceFolder;
-        if (source && !choices.includes(source)) dropdown.addOption(source, m.missingFolder(source));
-        dropdown.setValue(source).onChange(async value => {
-          await this.plugin.updateFilters(settings => { settings.sourceFolder = value; });
-        });
-      });
-    this.renderExclusions('excludedFiles', m.excludedFiles, m.excludedFilesHint, m.searchFiles,
-      () => this.app.vault.getMarkdownFiles().map(file => file.path).sort((a, b) => a.localeCompare(b)));
-    this.renderExclusions('excludedTags', m.excludedTags, m.excludedTagsHint, m.searchTags, () => {
-      const tags = this.app.vault.getMarkdownFiles().flatMap(file => {
-        const cache = this.app.metadataCache.getFileCache(file);
-        return cache === null ? [] : getAllTags(cache) ?? [];
-      });
-      return [...new Set(tags.map(tag => tag.toLowerCase()))].sort((a, b) => a.localeCompare(b));
-    });
-    this.renderExclusions('excludedFolders', m.excludedFolders, m.excludedFoldersHint, m.searchFolders, folders);
-    new Setting(this.containerEl).setName(m.reminders)
-      .setDesc(m.remindersHint)
-      .addToggle(toggle => toggle.setValue(this.plugin.state.settings.reminders).onChange(async value => {
-        await this.plugin.update((state, now) => {
-          state.settings.reminders = value;
-          state.nextReminderAt = now.getTime() + state.settings.intervalMinutes * 60_000;
-        });
-      }));
-    new Setting(this.containerEl).setName(m.reminderInterval)
-      .setDesc(m.reminderIntervalHint)
-      .addSlider(slider => slider.setLimits(15, 240, 15)
-        .setValue(this.plugin.state.settings.intervalMinutes).setDynamicTooltip()
-        .onChange(async value => {
-          await this.plugin.update((state, now) => {
-            state.settings.intervalMinutes = value;
-            state.nextReminderAt = now.getTime() + value * 60_000;
-          });
-        }));
-    new Setting(this.containerEl).setName(m.previewReminder)
-      .setDesc(m.previewReminderHint)
-      .addButton(button => button.setButtonText(m.showReminder).onClick(() => { void this.plugin.previewReminder(); }));
+    return [{
+      type: 'group',
+      heading: 'Note Again',
+      items: [
+        {
+          name: m.dailyGoal,
+          desc: m.dailyGoalHint,
+          render: setting => { this.renderDailyGoal(setting); },
+        },
+        {
+          name: m.sourceFolder,
+          desc: m.sourceFolderHint,
+          render: setting => {
+            setting.addDropdown(dropdown => {
+              dropdown.addOption('', m.entireVault);
+              const choices = folders();
+              for (const folder of choices) dropdown.addOption(folder, folder);
+              const source = this.plugin.state.settings.sourceFolder;
+              if (source && !choices.includes(source)) dropdown.addOption(source, m.missingFolder(source));
+              dropdown.setValue(source).onChange(async value => {
+                await this.plugin.updateFilters(settings => { settings.sourceFolder = value; });
+              });
+            });
+          },
+        },
+        {
+          name: m.excludedFiles,
+          desc: m.excludedFilesHint,
+          render: setting => {
+            this.renderExclusions(setting, 'excludedFiles', m.searchFiles,
+              () => this.app.vault.getMarkdownFiles().map(file => file.path).sort((a, b) => a.localeCompare(b)));
+          },
+        },
+        {
+          name: m.excludedTags,
+          desc: m.excludedTagsHint,
+          render: setting => {
+            this.renderExclusions(setting, 'excludedTags', m.searchTags, () => {
+              const tags = this.app.vault.getMarkdownFiles().flatMap(file => {
+                const cache = this.app.metadataCache.getFileCache(file);
+                return cache === null ? [] : getAllTags(cache) ?? [];
+              });
+              return [...new Set(tags.map(tag => tag.toLowerCase()))].sort((a, b) => a.localeCompare(b));
+            });
+          },
+        },
+        {
+          name: m.excludedFolders,
+          desc: m.excludedFoldersHint,
+          render: setting => { this.renderExclusions(setting, 'excludedFolders', m.searchFolders, folders); },
+        },
+        {
+          name: m.reminders,
+          desc: m.remindersHint,
+          render: setting => {
+            setting.addToggle(toggle => toggle.setValue(this.plugin.state.settings.reminders).onChange(async value => {
+              await this.plugin.update((state, now) => {
+                state.settings.reminders = value;
+                state.nextReminderAt = now.getTime() + state.settings.intervalMinutes * 60_000;
+              });
+            }));
+          },
+        },
+        {
+          name: m.reminderInterval,
+          desc: m.reminderIntervalHint,
+          render: setting => {
+            setting.addSlider(slider => slider.setLimits(15, 240, 15)
+              .setValue(this.plugin.state.settings.intervalMinutes)
+              .onChange(async value => {
+                await this.plugin.update((state, now) => {
+                  state.settings.intervalMinutes = value;
+                  state.nextReminderAt = now.getTime() + value * 60_000;
+                });
+              }));
+          },
+        },
+        {
+          name: m.previewReminder,
+          desc: m.previewReminderHint,
+          render: setting => {
+            setting.addButton(button => button.setButtonText(m.showReminder).onClick(() => { void this.plugin.previewReminder(); }));
+          },
+        },
+      ],
+    }];
   }
 }

@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*.*.*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Check release version
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+          const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+          assert.match(process.env.GITHUB_REF_NAME, /^\d+\.\d+\.\d+$/);
+          for (const version of [manifest.version, packageJson.version, lock.version, lock.packages[''].version]) {
+            assert.equal(version, process.env.GITHUB_REF_NAME);
+          }
+          JS
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+      - run: npm test
+      - name: Attest release assets
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: dist/note-again/*
+      - name: Prepare release notes
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const changelog = fs.readFileSync('CHANGELOG.md', 'utf8');
+          const heading = '## [' + process.env.GITHUB_REF_NAME + ']';
+          const start = changelog.indexOf(heading);
+          assert.ok(start >= 0, 'Version missing from CHANGELOG.md');
+          const next = changelog.indexOf('\n## [', start + heading.length);
+          fs.writeFileSync('release-notes.md', changelog.slice(start, next < 0 ? undefined : next));
+          JS
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/note-again/main.js dist/note-again/manifest.json dist/note-again/styles.css --verify-tag --title "Note Again $GITHUB_REF_NAME" --notes-file release-notes.md

@@ -1,7 +1,7 @@
 {
   "id": "note-again",
   "name": "Note Again",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "minAppVersion": "1.15.0",
   "description": "Build a habit of revisiting your notes with a random daily selection, a goal you set, and streaks.",
   "author": "wert-rar",

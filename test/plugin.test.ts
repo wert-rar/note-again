@@ -60,14 +60,14 @@ function fixture(saveData: (state: unknown) => Promise<void>, language?: string)
     addOption() { return this; }
     setValue(value: unknown) { this.inputEl.value = String(value); return this; }
     setLimits() { return this; }
-    setDynamicTooltip() { return this; }
   }
   class MockSetting {
     name = '';
     control!: Control;
+    settingEl: Element;
     controlEl = new Element();
     descEl = new Element();
-    constructor(_container: any) { controls.push(this); }
+    constructor(container: Element) { this.settingEl = container.createDiv(); this.settingEl.children.push(this.descEl, this.controlEl); controls.push(this); }
     setName(name: string) { this.name = name; return this; }
     setDesc(text: string) { this.descEl.setText(text); return this; }
     addButton(callback: any) { this.control = new Control(); callback(this.control); return this; }
@@ -75,7 +75,21 @@ function fixture(saveData: (state: unknown) => Promise<void>, language?: string)
     addToggle(callback: any) { return this.addButton(callback); }
     addSlider(callback: any) { return this.addButton(callback); }
   }
-  class MockSettingTab { containerEl = new Element(); app: any; constructor(app: any) { this.app = app; } }
+  class MockSettingTab {
+    containerEl = new Element();
+    app: any;
+    constructor(app: any) { this.app = app; }
+    getSettingDefinitions(): any[] { return []; }
+    display() {
+      this.containerEl.empty();
+      for (const group of this.getSettingDefinitions()) {
+        for (const definition of group.items) {
+          const setting = new MockSetting(this.containerEl).setName(definition.name).setDesc(definition.desc);
+          definition.render(setting);
+        }
+      }
+    }
+  }
   class MockPicker {
     setPlaceholder() {}
     open() { pickers.push(this); }
@@ -114,6 +128,8 @@ function fixture(saveData: (state: unknown) => Promise<void>, language?: string)
         getAllTags: (cache: { tags?: { tag: string }[] }) => cache.tags?.map(entry => entry.tag) ?? [] };
     },
     document: fakeDocument,
+    activeDocument: fakeDocument,
+    createFragment: () => new Element(),
     window: { setInterval: (callback: () => void) => on('timer', callback) },
     Date: class extends Date { constructor(value = now) { super(value); } },
     console: { error() {} },
@@ -374,10 +390,12 @@ test('daily goal settings grade values, step by one and reject goals above the c
   assert.equal(input.value, '5');
   assert.equal(field.attrs['data-level'], 'normal');
   assert.equal(input.attrs['aria-describedby'], setting.descEl.id);
-  await down.onclick();
+  down.onclick();
+  await plugin.pending;
   assert.equal(input.value, '4');
   assert.equal(plugin.state.settings.dailyGoal, 4);
-  await up.onclick();
+  up.onclick();
+  await plugin.pending;
   assert.equal(input.value, '5');
   assert.equal(plugin.state.settings.dailyGoal, 5);
 
@@ -391,26 +409,30 @@ test('daily goal settings grade values, step by one and reject goals above the c
     input.events.get('input')();
     assert.equal(field.attrs['data-level'], level, value);
     assert.equal(input.attrs['aria-invalid'], String(invalid), value);
-    await input.events.get('change')();
+    input.events.get('change')();
+    await plugin.pending;
     assert.equal(plugin.state.settings.dailyGoal, expected);
     assert.equal(plugin.state.quest.goal, 5);
     assert.equal(plugin.state.quest.opened.length, 1);
   }
   files.splice(12);
   input.value = '13';
-  await input.events.get('change')();
+  input.events.get('change')();
+  await plugin.pending;
   assert.equal(input.max, '12');
   assert.equal(input.attrs['aria-invalid'], 'true');
   assert.match(setting.descEl.text, /Markdown notes in this vault: 12/);
   input.value = '12';
-  await input.events.get('change')();
+  input.events.get('change')();
+  await plugin.pending;
   assert.equal(plugin.state.settings.dailyGoal, 12);
   assert.equal(up.disabled, true);
   assert.doesNotMatch(setting.descEl.text, /Markdown notes in this vault/);
 
   addFile('another.md');
   input.value = '13';
-  await input.events.get('change')();
+  input.events.get('change')();
+  await plugin.pending;
   nextDay();
   await plugin.showQuest();
   assert.equal(plugin.state.quest.goal, 13);
@@ -429,6 +451,8 @@ test('settings pickers add and remove saved exclusions, normalize tags, and reta
   await plugin.onload();
   const tab = tabs[0];
   tab.display();
+  assert.deepEqual(Array.from(tab.getSettingDefinitions()[0].items, (item: { name: string }) => item.name),
+    ['Daily note goal', 'Source folder', 'Excluded files', 'Excluded tags', 'Excluded folders', 'Gentle reminders', 'Reminder interval', 'Preview reminder']);
   assert.deepEqual(controls.map(control => control.name), ['Daily note goal', 'Source folder', 'Excluded files', 'Excluded tags', 'Excluded folders', 'Gentle reminders', 'Reminder interval', 'Preview reminder']);
   assert.deepEqual(tab.containerEl.children.filter((child: any) => child.tag === 'p'), []);
   const add = (name: string) => controls.find(control => control.name === name).control.callback();
@@ -436,12 +460,14 @@ test('settings pickers add and remove saved exclusions, normalize tags, and reta
   assert.ok(descendants(tab.containerEl).some(element => element.text === 'missing.md'));
   add('Excluded files');
   assert.deepEqual(Array.from(pickers[0].getItems()), paths);
-  await pickers[0].onChooseItem('a.md');
+  pickers[0].onChooseItem('a.md');
+  await plugin.pending;
   assert.deepEqual(Array.from(plugin.state.settings.excludedFiles), ['missing.md', 'a.md']);
   add('Excluded files');
   assert.equal(pickers[1].getItems().includes('a.md'), false);
   const remove = descendants(tab.containerEl).find(element => element.attrs['aria-label'] === 'Remove a.md');
-  await remove.onclick();
+  remove.onclick();
+  await plugin.pending;
   assert.deepEqual(Array.from(plugin.state.settings.excludedFiles), ['missing.md']);
   add('Excluded tags');
   assert.deepEqual(Array.from(pickers[2].getItems()), ['#skip', '#skip/nested']);
@@ -451,10 +477,12 @@ test('settings pickers add and remove saved exclusions, normalize tags, and reta
   add('Excluded tags');
   assert.deepEqual(Array.from(pickers[3].getItems()), ['#new', '#skip', '#skip/nested']);
   assert.equal(tagReads, paths.length * 2);
-  await pickers[2].onChooseItem('#skip');
+  pickers[2].onChooseItem('#skip');
+  await plugin.pending;
   add('Excluded folders');
   assert.deepEqual(Array.from(pickers[4].getItems()), ['Archive']);
-  await pickers[4].onChooseItem('Archive');
+  pickers[4].onChooseItem('Archive');
+  await plugin.pending;
   assert.deepEqual(saves[saves.length - 1].settings.excludedTags, ['#skip']);
   assert.deepEqual(saves[saves.length - 1].settings.excludedFolders, ['Archive']);
   assert.deepEqual(saves[saves.length - 1].settings.excludedFiles, ['missing.md']);
