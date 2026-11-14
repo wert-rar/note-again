@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - '*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release from the checked-out source
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -13,6 +19,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -29,9 +37,9 @@ jobs:
           const manifest = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
           const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
           const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
-          assert.match(process.env.GITHUB_REF_NAME, /^\d+\.\d+\.\d+$/);
+          assert.match(process.env.RELEASE_VERSION, /^\d+\.\d+\.\d+$/);
           for (const version of [manifest.version, packageJson.version, lock.version, lock.packages[''].version]) {
-            assert.equal(version, process.env.GITHUB_REF_NAME);
+            assert.equal(version, process.env.RELEASE_VERSION);
           }
           JS
       - run: npm ci
@@ -48,7 +56,7 @@ jobs:
           import assert from 'node:assert/strict';
           import fs from 'node:fs';
           const changelog = fs.readFileSync('CHANGELOG.md', 'utf8');
-          const heading = '## [' + process.env.GITHUB_REF_NAME + ']';
+          const heading = '## [' + process.env.RELEASE_VERSION + ']';
           const start = changelog.indexOf(heading);
           assert.ok(start >= 0, 'Version missing from CHANGELOG.md');
           const next = changelog.indexOf('\n## [', start + heading.length);
@@ -58,4 +66,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/note-again/main.js dist/note-again/manifest.json dist/note-again/styles.css --verify-tag --title "Note Again $GITHUB_REF_NAME" --notes-file release-notes.md
+          gh release create "$RELEASE_VERSION" dist/note-again/main.js dist/note-again/manifest.json dist/note-again/styles.css --verify-tag --title "Note Again $RELEASE_VERSION" --notes-file release-notes.md
